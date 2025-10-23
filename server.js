@@ -1,0 +1,553 @@
+import express from "express";
+import bodyParser from "body-parser";
+import axios from "axios";
+import pg from "pg";
+import PDFDocument from "pdfkit";
+
+const db = new pg.Client({
+  user: "postgres",
+  host: "localhost",
+  database: "iDoc",
+  password: "250689",
+  port: 5432,
+});
+db.connect();
+
+const app = express();
+const port = 3000;
+
+app.use(express.static("public"));
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.json());
+
+app.get("/", async(req, res) => {
+
+  try {
+    const result = await axios.get("https://stoic-quotes.com/api/quote");
+    const quote = result.data.text;
+    const author = result.data.author;
+    res.render("index.ejs", { content: quote, author: author });
+  } catch (error) {
+    res.status(404).send(error.message);
+  }
+}); 
+
+app.get("/invoices", async (req, res) => {
+  try {
+    // Join invoices with patients table to get patient names
+    const invoicesResult = await db.query(`
+      SELECT 
+        i.*,
+        CONCAT_WS(' ', p.name, p.middlename, p.surname) as patient_name
+      FROM invoices i
+      LEFT JOIN patients p ON i.fiscalcode = p.fiscalcode
+      ORDER BY i.id
+    `);
+    
+    // Helper function to parse currency
+    const parseCurrency = (str) => {
+      if (!str) return 0;
+      const clean = str.replace(/[€$]/g, '').replace(',', '.').trim();
+      const num = parseFloat(clean);
+      return isNaN(num) ? 0 : num;
+    };
+    
+    // Calculate totals for each invoice
+    const invoicesWithTotals = invoicesResult.rows.map(invoice => {
+      const dueAmount = parseCurrency(invoice.dueamount);
+      const withholding = parseCurrency(invoice.withholding);
+      const total = dueAmount + withholding;
+      
+      return {
+        ...invoice,
+        total: '€' + total.toFixed(2).replace('.', ','),
+        patient_name: invoice.patient_name || 'Unknown Patient'
+      };
+    });
+    
+    // Get unique fiscal codes from patients table for the dropdown
+    let fiscalCodes = [];
+    try {
+      const fiscalCodesResult = await db.query(
+        "SELECT fiscalcode, CONCAT_WS(' ', name, middlename, surname) as full_name FROM patients ORDER BY surname, name"
+      );
+      fiscalCodes = fiscalCodesResult.rows;
+    } catch (err) {
+      console.log("Could not fetch fiscal codes from patients table:", err.message);
+      // Fallback to invoices table
+      const fiscalCodesResult = await db.query(
+        "SELECT DISTINCT fiscalcode FROM invoices WHERE fiscalcode IS NOT NULL ORDER BY fiscalcode"
+      );
+      fiscalCodes = fiscalCodesResult.rows.map(row => ({ fiscalcode: row.fiscalcode, full_name: row.fiscalcode }));
+    }
+    
+    res.render("invoices.ejs", { 
+      invoices: invoicesWithTotals,
+      fiscalCodes: fiscalCodes
+    });
+  } catch (err) {
+    console.log(err);
+    res.status(500).send("Error fetching invoices");
+  }
+});
+
+// API Routes for CRUD operations
+
+// UPDATE invoice (PATCH)
+app.patch("/api/invoices/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    let updates = { ...req.body };
+    
+    console.log("Received PATCH request:", { id, updates });
+    
+    // Helper function to clean and validate values based on field type
+    const cleanValue = (field, value) => {
+      if (value === null || value === undefined) return value;
+      
+      // Currency fields
+      if (field === 'dueamount' || field === 'withholding') {
+        if (typeof value === 'number') return value;
+        // Remove currency symbols, spaces, and convert comma to dot
+        const cleaned = value.toString().replace(/[€$\s]/g, '').replace(',', '.');
+        const num = parseFloat(cleaned);
+        return isNaN(num) ? 0 : num;
+      }
+      
+      // Boolean fields
+      if (field === 'traced') {
+        return value === true || value === 'true' || value === 1;
+      }
+      
+      // Date fields
+      if (field === 'invoicedate' || field === 'collecteddate') {
+        if (value === '') return null;
+        return value;
+      }
+      
+      // Text fields (system, fiscalcode)
+      return value.toString().trim();
+    };
+    
+    // Clean all update values
+    Object.keys(updates).forEach(field => {
+      updates[field] = cleanValue(field, updates[field]);
+    });
+    
+    console.log("Cleaned updates:", updates);
+    
+    if (!updates || Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No update data provided" });
+    }
+    
+    const fields = Object.keys(updates);
+    const values = Object.values(updates);
+    
+    const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
+    values.push(id);
+    
+    const query = `UPDATE invoices SET ${setClause} WHERE id = $${values.length} RETURNING *`;
+    
+    console.log("Executing query:", query, values);
+    
+    const result = await db.query(query, values);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Invoice not found" });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: "Invoice updated successfully", 
+      invoice: result.rows[0] 
+    });
+  } catch (err) {
+    console.log("PATCH error:", err);
+    res.status(500).json({ error: "Error updating invoice", details: err.message, stack: err.stack });
+  }
+});
+
+// DELETE invoice
+app.delete("/api/invoices/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    console.log("Received DELETE request for id:", id); // Debug log
+    
+    const result = await db.query(
+      "DELETE FROM invoices WHERE id = $1 RETURNING *",
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Invoice not found" });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: "Invoice deleted successfully", 
+      invoice: result.rows[0] 
+    });
+  } catch (err) {
+    console.log("DELETE error:", err);
+    res.status(500).json({ error: "Error deleting invoice", details: err.message });
+  }
+});
+
+// CREATE invoice (POST)
+app.post("/api/invoices", async (req, res) => {
+  try {
+    console.log("Received POST request:", req.body);
+    
+    const { dueamount, withholding, system, invoicedate, traced, collecteddate, fiscalcode } = req.body;
+    
+    let query, values;
+    
+    if (fiscalcode && fiscalcode.trim() !== '') {
+      query = `INSERT INTO invoices (dueamount, withholding, system, invoicedate, traced, collecteddate, fiscalcode) 
+               VALUES ($1, $2, $3, $4, $5, $6, $7) 
+               RETURNING *`;
+      values = [dueamount, withholding, system, invoicedate, traced || false, collecteddate, fiscalcode];
+    } else {
+      query = `INSERT INTO invoices (dueamount, withholding, system, invoicedate, traced, collecteddate) 
+               VALUES ($1, $2, $3, $4, $5, $6) 
+               RETURNING *`;
+      values = [dueamount, withholding, system, invoicedate, traced || false, collecteddate];
+    }
+    
+    const result = await db.query(query, values);
+    
+    res.status(201).json({ 
+      success: true, 
+      message: "Invoice created successfully", 
+      invoice: result.rows[0] 
+    });
+  } catch (err) {
+    console.log("POST error:", err);
+    res.status(500).json({ error: "Error creating invoice", details: err.message });
+  }
+});
+
+// Generate PDF for invoice
+app.get("/api/invoices/:id/pdf", async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const result = await db.query(`
+      SELECT 
+        i.*,
+        CONCAT_WS(' ', p.name, p.middlename, p.surname) as patient_name,
+        p.name as patient_first_name,
+        p.middlename as patient_middle_name,
+        p.surname as patient_surname
+      FROM invoices i
+      LEFT JOIN patients p ON i.fiscalcode = p.fiscalcode
+      WHERE i.id = $1
+    `, [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Invoice not found" });
+    }
+    
+    const invoice = result.rows[0];
+    
+    // Helper function to parse currency
+    const parseCurrency = (str) => {
+      if (!str) return 0;
+      const clean = str.toString().replace(/[€$]/g, '').replace(',', '.').trim();
+      const num = parseFloat(clean);
+      return isNaN(num) ? 0 : num;
+    };
+    
+    // Helper function to format currency
+    const formatCurrency = (num) => {
+      return '€' + num.toFixed(2).replace('.', ',');
+    };
+    
+    // Helper function to format date
+    const formatDate = (dateStr) => {
+      if (!dateStr) return 'N/A';
+      const date = new Date(dateStr);
+      return date.toLocaleDateString('en-GB', { 
+        day: '2-digit', 
+        month: '2-digit', 
+        year: 'numeric' 
+      });
+    };
+    
+    // Calculate amounts
+    const dueAmount = parseCurrency(invoice.dueamount);
+    const withholding = parseCurrency(invoice.withholding);
+    const total = dueAmount + withholding;
+    
+    // Check if stamp is required (due amount > €77.47)
+    const requiresStamp = dueAmount > 77.47;
+    
+    // Create PDF document
+    const doc = new PDFDocument({ 
+      margin: 50,
+      size: 'A4'
+    });
+    
+    // Set response headers for PDF download/display
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename=invoice-${id}.pdf`);
+    
+    // Pipe PDF to response
+    doc.pipe(res);
+    
+    // STAMP PLACEHOLDER (if required) - Top Right Corner
+    // 3cm = 85.04 points (1 cm = 28.35 points)
+    const stampSize = 85.04; // 3cm in points
+    if (requiresStamp) {
+      const stampX = 50; // Left side (595 - 100 margin)
+      const stampY = 50;  // Top
+      
+      // Draw square border
+      doc.rect(stampX, stampY, stampSize, stampSize)
+         .strokeColor('#dc3545')
+         .lineWidth(2)
+         .dash(5, { space: 3 })
+         .stroke();
+      
+      // Reset dash pattern
+      doc.undash();
+      
+      // Add text inside the square
+      doc.fontSize(10)
+         .fillColor('#dc3545')
+         .font('Helvetica-Bold')
+         .text('INSERIRE', stampX, stampY + 25, {
+           width: stampSize,
+           align: 'center'
+         })
+         .text('BOLLO', stampX, stampY + 40, {
+           width: stampSize,
+           align: 'center'
+         });
+      
+      // Add small note below
+      doc.fontSize(7)
+         .fillColor('#666666')
+         .font('Helvetica')
+         .text('€ 2,00', stampX, stampY + 60, {
+           width: stampSize,
+           align: 'center'
+         });
+    }
+    
+    // HEADER SECTION
+    doc.fontSize(28)
+       .fillColor('#0d6efd')
+       .text('INVOICE', { align: 'center' });
+    
+    doc.fontSize(12)
+       .fillColor('#666666')
+       .text(`Invoice Number: #${invoice.id}`, { align: 'center' });
+    
+    doc.moveDown(0.5);
+    
+    // Line separator
+    doc.moveTo(50, doc.y)
+       .lineTo(545, doc.y)
+       .strokeColor('#0d6efd')
+       .lineWidth(2)
+       .stroke();
+    
+    doc.moveDown(1.5);
+    
+    // INVOICE DETAILS SECTION - Two columns
+    const leftColumn = 50;
+    const rightColumn = 320;
+    let currentY = doc.y;
+    
+    // Left Column - Patient Information
+    doc.fontSize(10)
+       .fillColor('#999999')
+       .text('BILLED TO:', leftColumn, currentY);
+    
+    currentY += 20;
+    doc.fontSize(14)
+       .fillColor('#000000')
+       .font('Helvetica-Bold')
+       .text(invoice.patient_name || 'Unknown Patient', leftColumn, currentY);
+    
+    currentY += 20;
+    doc.fontSize(10)
+       .font('Helvetica')
+       .fillColor('#666666')
+       .text(`Fiscal Code: ${invoice.fiscalcode || 'N/A'}`, leftColumn, currentY);
+    
+    // Right Column - Invoice Information
+    currentY = doc.y - 60; // Reset to top of left column
+    
+    doc.fontSize(10)
+       .fillColor('#999999')
+       .text('INVOICE DETAILS:', rightColumn, currentY);
+    
+    currentY += 20;
+    doc.fontSize(10)
+       .fillColor('#000000')
+       .text('Invoice Date:', rightColumn, currentY);
+    doc.text(formatDate(invoice.invoicedate), rightColumn + 100, currentY);
+    
+    currentY += 18;
+    doc.text('Payment System:', rightColumn, currentY);
+    doc.text(invoice.system || 'Not specified', rightColumn + 100, currentY);
+    
+    currentY += 18;
+    doc.text('Status:', rightColumn, currentY);
+    doc.fillColor(invoice.traced ? '#28a745' : '#dc3545')
+       .text(invoice.traced ? 'Traced' : 'Not Traced', rightColumn + 100, currentY);
+    
+    if (invoice.collecteddate) {
+      currentY += 18;
+      doc.fillColor('#000000')
+         .text('Collected Date:', rightColumn, currentY);
+      doc.text(formatDate(invoice.collecteddate), rightColumn + 100, currentY);
+    }
+    
+    doc.moveDown(3);
+    
+    // TABLE SECTION
+    const tableTop = doc.y + 20;
+    const descriptionX = 50;
+    const amountX = 450;
+    
+    // Table header
+    doc.rect(50, tableTop, 495, 30)
+       .fillColor('#f8f9fa')
+       .fill();
+    
+    doc.fontSize(11)
+       .fillColor('#000000')
+       .font('Helvetica-Bold')
+       .text('DESCRIPTION', descriptionX + 10, tableTop + 10)
+       .text('AMOUNT', amountX, tableTop + 10, { width: 85, align: 'right' });
+    
+    // Table rows
+    let rowY = tableTop + 40;
+    
+    doc.font('Helvetica')
+       .fontSize(10);
+    
+    // Due Amount row
+    doc.fillColor('#000000')
+       .text('Due Amount', descriptionX + 10, rowY)
+       .text(formatCurrency(dueAmount), amountX, rowY, { width: 85, align: 'right' });
+    
+    
+    rowY += 25;
+    doc.moveTo(50, rowY)
+       .lineTo(545, rowY)
+       .strokeColor('#dddddd')
+       .lineWidth(1)
+       .stroke();
+    
+    rowY += 15;
+    
+    // Withholding row
+    doc.fillColor('#000000')
+       .fontSize(10)
+       .text('Bollo', descriptionX + 10, rowY)
+       .text(formatCurrency(withholding), amountX, rowY, { width: 85, align: 'right' });
+    
+    rowY += 25;
+    doc.moveTo(50, rowY)
+       .lineTo(545, rowY)
+       .strokeColor('#dddddd')
+       .lineWidth(1)
+       .stroke();
+    
+    rowY += 15;
+    
+    // TOTAL SECTION
+    doc.rect(350, rowY, 195, 40)
+       .fillColor('#e7f5ff')
+       .fill();
+    
+    doc.fontSize(14)
+       .font('Helvetica-Bold')
+       .fillColor('#0d6efd')
+       .text('TOTAL AMOUNT:', 360, rowY + 12)
+       .text(formatCurrency(total), amountX, rowY + 12, { width: 85, align: 'right' });
+    
+    // SIGNATURE SECTION
+    const signatureY = rowY + 80;
+    
+    // Add signature image
+    try {
+      doc.image('public/images/signature.png', 350, signatureY, { 
+        width: 150,
+        align: 'right'
+      });
+      
+      // Add line under signature
+      doc.moveTo(350, signatureY + 60)
+         .lineTo(500, signatureY + 60)
+         .strokeColor('#000000')
+         .lineWidth(1)
+         .stroke();
+      
+      // Add signature label
+      doc.fontSize(10)
+         .fillColor('#000000')
+         .font('Helvetica')
+         .text('Authorized Signature', 350, signatureY + 65, { 
+           width: 150, 
+           align: 'center' 
+         });
+         
+      // Add date under signature
+      doc.fontSize(8)
+         .fillColor('#666666')
+         .text(`Date: ${formatDate(new Date())}`, 350, signatureY + 80, { 
+           width: 150, 
+           align: 'center' 
+         });
+         
+    } catch (err) {
+      console.log('Signature image not found:', err.message);
+      // If signature not found, just add text
+      doc.fontSize(10)
+         .fillColor('#000000')
+         .font('Helvetica-Bold')
+         .text('Authorized by:', 350, signatureY)
+         .fontSize(8)
+         .fillColor('#666666')
+         .text('[Signature image not available]', 350, signatureY + 20);
+    }
+    
+    // FOOTER SECTION
+    const footerY = 700;
+    
+    doc.moveTo(50, footerY)
+       .lineTo(545, footerY)
+       .strokeColor('#dddddd')
+       .lineWidth(1)
+       .stroke();
+    
+  
+    doc.fontSize(8)
+       .text('This is a computer-generated invoice with digital signature.', 
+             50, footerY + 35, { align: 'center' });
+    
+    doc.text(`Generated on: ${new Date().toLocaleString('en-GB')}`, 
+             50, footerY + 50, { align: 'center' });
+    
+
+    
+    // Finalize PDF
+    doc.end();
+    
+  } catch (err) {
+    console.log("PDF generation error:", err);
+    res.status(500).json({ error: "Error generating PDF", details: err.message });
+  }
+});
+
+
+app.listen(port, () => {
+  console.log(`Listening on port ${port}`);
+});
+
