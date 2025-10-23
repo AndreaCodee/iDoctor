@@ -107,9 +107,8 @@
                                     onclick="makeEditable(this)">
                                     <%= invoice.dueamount ? invoice.dueamount.replace('$', '€' ) : '€0,00' %>
                                 </td>
-                                <td class="editable-cell" data-field="withholding" data-type="text"
-                                    onclick="makeEditable(this)">
-                                    <%= invoice.withholding ? invoice.withholding.replace('$', '€' ) : '€0,00' %>
+                                <td class="align-middle bg-light" title="Auto-calculated">
+                                    <%= invoice.withholding ? invoice.withholding.replace('$', '€' ) : '€0,00' %>                           
                                 </td>
                                 <td class="total-cell align-middle" data-total>
                                     <%= invoice.total %>
@@ -175,7 +174,7 @@
                         <div class="mb-3">
                             <label for="withholding" class="form-label">Withholding (€)</label>
                             <input type="number" class="form-control" id="withholding" value="0.00" step="0.01" min="0"
-                                placeholder="0.00" onfocus="this.select()" required>
+                                placeholder="0.00" readonly disabled onfocus="this.select()" required>
                         </div>
                         <div class="mb-3">
                             <label for="system" class="form-label">System</label>
@@ -509,7 +508,7 @@
                 });
         }
 
-        // Show modal for adding invoice
+
         // Show modal for adding invoice
         function addNewInvoice() {
             // Set today's date as default
@@ -528,60 +527,66 @@
         }
 
         // Submit new invoice from modal
-        function submitNewInvoice() {
-            const fiscalcode = document.getElementById('fiscalcode').value;
+    // Submit new invoice from modal
+    function submitNewInvoice() {
+        const fiscalcode = document.getElementById('fiscalcode').value;
+        const dueAmount = parseFloat(document.getElementById('dueamount').value) || 0;
 
-            // Validate that a patient was selected
-            if (!fiscalcode) {
-                showNotification('Please select a patient from the list', 'danger');
-                document.getElementById('patient-search').focus();
-                return;
-            }
+        // Calculate withholding based on due amount
+        const withholding = dueAmount > 77.47 ? 2.00 : 0.00;
 
-            const newInvoice = {
-                dueamount: document.getElementById('dueamount').value,
-                withholding: document.getElementById('withholding').value,
-                system: document.getElementById('system').value,
-                invoicedate: document.getElementById('invoicedate').value,
-                traced: document.getElementById('traced').checked,
-                collecteddate: document.getElementById('collecteddate').value || null,
-                fiscalcode: fiscalcode
-            };
-
-            // Validate required fields
-            if (!newInvoice.system) {
-                showNotification('Please select a payment system', 'danger');
-                return;
-            }
-
-            fetch('/api/invoices', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(newInvoice)
-            })
-                .then(response => {
-                    if (!response.ok) {
-                        return response.json().then(err => {
-                            throw new Error(err.details || 'Creation failed');
-                        });
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    console.log('Invoice created successfully:', data);
-                    showNotification('Invoice created successfully', 'success');
-                    bootstrap.Modal.getInstance(document.getElementById('addInvoiceModal')).hide();
-                    setTimeout(() => window.location.reload(), 1000);
-                })
-                .catch(error => {
-                    console.error('Error creating invoice:', error);
-                    showNotification('Error creating invoice: ' + error.message, 'danger');
-                });
+        // Validate that a patient was selected
+        if (!fiscalcode) {
+            showNotification('Please select a patient from the list', 'danger');
+            document.getElementById('patient-search').focus();
+            return;
         }
 
-        // Check if table is empty and show message
+        const newInvoice = {
+            dueamount: dueAmount.toFixed(2),
+            withholding: withholding.toFixed(2),
+            system: document.getElementById('system').value,
+            invoicedate: document.getElementById('invoicedate').value,
+            traced: document.getElementById('traced').checked,
+            collecteddate: document.getElementById('collecteddate').value || null,
+            fiscalcode: fiscalcode
+        };
+
+        // Validate required fields
+        if (!newInvoice.system) {
+            showNotification('Please select a payment system', 'danger');
+            return;
+        }
+
+        console.log('Creating invoice with data:', newInvoice);
+
+        fetch('/api/invoices', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(newInvoice)
+        })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(err => {
+                        throw new Error(err.details || 'Creation failed');
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Invoice created successfully:', data);
+                showNotification('Invoice created successfully', 'success');
+                bootstrap.Modal.getInstance(document.getElementById('addInvoiceModal')).hide();
+                setTimeout(() => window.location.reload(), 1000);
+            })
+            .catch(error => {
+                console.error('Error creating invoice:', error);
+                showNotification('Error creating invoice: ' + error.message, 'danger');
+            });
+    }
+
         // Check if table is empty and show message
         function checkEmptyTable() {
             const tbody = document.getElementById('invoiceTableBody');
@@ -623,6 +628,36 @@
             <% }) %>
         ];
     <% } %>
+
+    // Setup withholding auto-calculation when modal is shown
+                document.getElementById('addInvoiceModal')?.addEventListener('shown.bs.modal', function () {
+                    const dueAmountInput = document.getElementById('dueamount');
+
+                    if (dueAmountInput) {
+                        // Auto-focus and select due amount
+                        dueAmountInput.focus();
+                        dueAmountInput.select();
+
+                        // Add input event listener for real-time calculation
+                        dueAmountInput.addEventListener('input', calculateWithholding);
+
+                        // Also trigger on blur
+                        dueAmountInput.addEventListener('blur', calculateWithholding);
+
+                        // Initial calculation
+                        calculateWithholding();
+                    }
+                });
+
+            // Remove event listeners when modal is hidden to prevent duplicates
+            document.getElementById('addInvoiceModal')?.addEventListener('hidden.bs.modal', function () {
+                const dueAmountInput = document.getElementById('dueamount');
+
+                if (dueAmountInput) {
+                    dueAmountInput.removeEventListener('input', calculateWithholding);
+                    dueAmountInput.removeEventListener('blur', calculateWithholding);
+                }
+            });
 });
 
         // Setup autocomplete when modal is shown
@@ -771,6 +806,37 @@
                 showNotification('Downloading invoice PDF...', 'success');
             }
         }
+
+        // Calculate withholding based on due amount
+            function calculateWithholding() {
+                const dueAmountInput = document.getElementById('dueamount');
+                const withholdingInput = document.getElementById('withholding');
+
+                if (!dueAmountInput || !withholdingInput) return;
+
+                const dueAmount = parseFloat(dueAmountInput.value) || 0;
+
+                // If due amount > 77.47, set withholding to 2.00, otherwise 0.00
+                if (dueAmount > 77.47) {
+                    withholdingInput.value = '2.00';
+                } else {
+                    withholdingInput.value = '0.00';
+                }
+            }
+
+            // Update the addNewInvoice function
+            function addNewInvoice() {
+                // Set today's date as default
+                document.getElementById('invoicedate').valueAsDate = new Date();
+
+                // Reset withholding
+                document.getElementById('withholding').value = '0.00';
+
+                // Show the modal
+                const modal = new bootstrap.Modal(document.getElementById('addInvoiceModal'));
+                modal.show();
+            }
+
     </script>
 </body>
 

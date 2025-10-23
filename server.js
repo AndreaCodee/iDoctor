@@ -101,38 +101,42 @@ app.patch("/api/invoices/:id", async (req, res) => {
     
     console.log("Received PATCH request:", { id, updates });
     
-    // Helper function to clean and validate values based on field type
-    const cleanValue = (field, value) => {
-      if (value === null || value === undefined) return value;
-      
-      // Currency fields
-      if (field === 'dueamount' || field === 'withholding') {
-        if (typeof value === 'number') return value;
-        // Remove currency symbols, spaces, and convert comma to dot
-        const cleaned = value.toString().replace(/[€$\s]/g, '').replace(',', '.');
-        const num = parseFloat(cleaned);
-        return isNaN(num) ? 0 : num;
-      }
-      
-      // Boolean fields
-      if (field === 'traced') {
-        return value === true || value === 'true' || value === 1;
-      }
-      
-      // Date fields
-      if (field === 'invoicedate' || field === 'collecteddate') {
-        if (value === '') return null;
-        return value;
-      }
-      
-      // Text fields (system, fiscalcode)
-      return value.toString().trim();
+    // Helper function to clean currency values
+    const cleanCurrency = (value) => {
+      if (!value) return value;
+      if (typeof value === 'number') return value;
+      return value.replace(/[€$]/g, '').replace(',', '.').trim();
     };
     
-    // Clean all update values
-    Object.keys(updates).forEach(field => {
-      updates[field] = cleanValue(field, updates[field]);
-    });
+    // Clean currency fields if they're being updated
+    if (updates.dueamount) {
+      updates.dueamount = cleanCurrency(updates.dueamount);
+      const dueAmountNum = parseFloat(updates.dueamount);
+      
+      // Automatically recalculate withholding when due amount is updated
+      updates.withholding = dueAmountNum > 77.47 ? '2.00' : '0.00';
+      
+      console.log('Auto-calculated withholding:', updates.withholding);
+    }
+    
+    // If someone tries to manually update withholding, ignore it (security)
+    if (updates.withholding && !updates.dueamount) {
+      console.log('Ignoring manual withholding update');
+      delete updates.withholding;
+    }
+    
+    // Handle boolean values for traced field
+    if (updates.traced !== undefined) {
+      updates.traced = updates.traced === true || updates.traced === 'true';
+    }
+    
+    // Handle date fields
+    if (updates.invoicedate) {
+      updates.invoicedate = updates.invoicedate;
+    }
+    if (updates.collecteddate) {
+      updates.collecteddate = updates.collecteddate || null;
+    }
     
     console.log("Cleaned updates:", updates);
     
@@ -163,7 +167,7 @@ app.patch("/api/invoices/:id", async (req, res) => {
     });
   } catch (err) {
     console.log("PATCH error:", err);
-    res.status(500).json({ error: "Error updating invoice", details: err.message, stack: err.stack });
+    res.status(500).json({ error: "Error updating invoice", details: err.message });
   }
 });
 
@@ -199,7 +203,22 @@ app.post("/api/invoices", async (req, res) => {
   try {
     console.log("Received POST request:", req.body);
     
-    const { dueamount, withholding, system, invoicedate, traced, collecteddate, fiscalcode } = req.body;
+    let { dueamount, system, invoicedate, traced, collecteddate, fiscalcode } = req.body;
+    
+    // Helper function to clean currency values
+    const cleanCurrency = (value) => {
+      if (!value) return '0';
+      return value.replace(/[€$]/g, '').replace(',', '.').trim();
+    };
+    
+    // Clean the currency field
+    dueamount = cleanCurrency(dueamount);
+    const dueAmountNum = parseFloat(dueamount);
+    
+    // Calculate withholding automatically based on due amount
+    const withholding = dueAmountNum > 77.47 ? '2.00' : '0.00';
+    
+    console.log("Cleaned values:", { dueamount, withholding, calculated: true });
     
     let query, values;
     
