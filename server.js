@@ -258,7 +258,8 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
         CONCAT_WS(' ', p.name, p.middlename, p.surname) as patient_name,
         p.name as patient_first_name,
         p.middlename as patient_middle_name,
-        p.surname as patient_surname
+        p.surname as patient_surname,
+        p.address as patient_address
       FROM invoices i
       LEFT JOIN patients p ON i.fiscalcode = p.fiscalcode
       WHERE i.id = $1
@@ -380,7 +381,10 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
     const rightColumn = 320;
     let currentY = doc.y;
     
-    // Left Column - Patient Information
+    // Store starting Y position for right column
+    const startY = currentY;
+    
+    // Left Column - Patient Information (with address)
     doc.fontSize(10)
        .fillColor('#999999')
        .text('BILLED TO:', leftColumn, currentY);
@@ -397,8 +401,39 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
        .fillColor('#666666')
        .text(`Fiscal Code: ${invoice.fiscalcode || 'N/A'}`, leftColumn, currentY);
     
+    // Add address if available
+    if (invoice.patient_address) {
+      currentY += 15;
+      doc.text(invoice.patient_address, leftColumn, currentY, {
+        width: 240,
+        align: 'left'
+      });
+    }
+    
+    // Add city, postal code, province
+    if (invoice.patient_city || invoice.patient_postalcode) {
+      currentY += 15;
+      const cityLine = [
+        invoice.patient_postalcode,
+        invoice.patient_city,
+        invoice.patient_province ? `(${invoice.patient_province})` : null
+      ].filter(Boolean).join(' ');
+      
+      if (cityLine) {
+        doc.text(cityLine, leftColumn, currentY);
+      }
+    }
+    
+    // Add country if it exists and is not Italy
+    if (invoice.patient_country && invoice.patient_country.toUpperCase() !== 'ITALY' && invoice.patient_country.toUpperCase() !== 'ITALIA') {
+      currentY += 15;
+      doc.font('Helvetica-Bold')
+         .text(invoice.patient_country.toUpperCase(), leftColumn, currentY);
+      doc.font('Helvetica'); // Reset font
+    }
+    
     // Right Column - Invoice Information
-    currentY = doc.y - 60; // Reset to top of left column
+    currentY = startY; // Reset to top for right column
     
     doc.fontSize(10)
        .fillColor('#999999')
@@ -417,7 +452,7 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
     currentY += 18;
     doc.text('Status:', rightColumn, currentY);
     doc.fillColor(invoice.traced ? '#28a745' : '#dc3545')
-       .text(invoice.traced ? 'Traced' : 'Not Traced', rightColumn + 100, currentY);
+       .text(invoice.traced ? 'Traced ✓' : 'Not Traced', rightColumn + 100, currentY);
     
     if (invoice.collecteddate) {
       currentY += 18;
@@ -426,7 +461,9 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
       doc.text(formatDate(invoice.collecteddate), rightColumn + 100, currentY);
     }
     
-    doc.moveDown(3);
+    // Ensure we move down enough to clear both columns
+    doc.y = Math.max(doc.y, currentY + 30);
+    doc.moveDown(1);
     
     // TABLE SECTION
     const tableTop = doc.y + 20;
