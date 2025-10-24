@@ -241,18 +241,24 @@
         }
 
         // Calculate and update total for a row
-        function updateTotal(row) {
-            const dueAmountCell = row.querySelector('[data-field="dueamount"]');
-            const withholdingCell = row.querySelector('[data-field="withholding"]');
-            const totalCell = row.querySelector('[data-total]');
+            function updateTotal(row) {
+                const dueAmountCell = row.querySelector('[data-field="dueamount"]');
+                const withholdingCell = row.querySelector('[data-field="withholding"]');
+                const totalCell = row.querySelector('[data-total]');
 
-            if (dueAmountCell && withholdingCell && totalCell) {
-                const dueAmount = parseAmount(dueAmountCell.textContent);
-                const withholding = parseAmount(withholdingCell.textContent);
-                const total = dueAmount + withholding;
-                totalCell.textContent = formatCurrency(total);
+                if (dueAmountCell && withholdingCell && totalCell) {
+                    const dueAmount = parseAmount(dueAmountCell.textContent);
+                    const withholding = parseAmount(withholdingCell.textContent);
+                    const total = dueAmount + withholding;
+                    totalCell.textContent = formatCurrency(total);
+
+                    console.log('Total updated:', {
+                        dueAmount,
+                        withholding,
+                        total: formatCurrency(total)
+                    });
+                }
             }
-        }
 
         // Make cell editable
         function makeEditable(cell) {
@@ -383,80 +389,106 @@
         }
 
         // Save edited cell
-        function saveCell(cell) {
-            if (!cell || !cell.classList.contains('editing')) return;
+        // Save edited cell
+            function saveCell(cell) {
+                if (!cell || !cell.classList.contains('editing')) return;
 
-            const input = cell.querySelector('input, select');
-            if (!input) return;
+                const input = cell.querySelector('input, select');
+                if (!input) return;
 
-            const field = cell.dataset.field;
-            const type = cell.dataset.type;
-            const invoiceId = cell.closest('tr').dataset.invoiceId;
-            const row = cell.closest('tr');
+                const field = cell.dataset.field;
+                const type = cell.dataset.type;
+                const invoiceId = cell.closest('tr').dataset.invoiceId;
+                const row = cell.closest('tr');
 
-            let newValue;
+                let newValue;
+                let updateData = {};
 
-            if (type === 'checkbox') {
-                newValue = input.checked;
-                cell.textContent = newValue ? '✓' : '✗';
-            } else if (type === 'select') {
-                newValue = input.value;
-                // If empty value selected, restore original
-                if (!newValue || newValue === '') {
-                    cell.textContent = cell.dataset.originalValue || 'Not Set';
-                    cell.classList.remove('editing');
-                    currentEditingCell = null;
-                    return;
-                }
-                cell.textContent = newValue;
-            } else if (field === 'dueamount' || field === 'withholding') {
-                // Format currency fields
-                const amount = parseAmount(input.value);
-                newValue = formatCurrency(amount);
-                cell.textContent = newValue;
-                // Update the total when amount fields change
-                setTimeout(() => updateTotal(row), 100);
-            } else {
-                newValue = input.value;
-                cell.textContent = newValue;
-            }
-
-            cell.classList.remove('editing');
-            currentEditingCell = null;
-            delete cell.dataset.originalValue;
-
-            // Prepare update data
-            const updateData = {};
-            updateData[field] = newValue;
-
-            console.log('Updating invoice:', { invoiceId, field, newValue });
-
-            // PATCH request to update invoice
-            fetch(`/api/invoices/${invoiceId}`, {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(updateData)
-            })
-                .then(response => {
-                    if (!response.ok) throw new Error('Update failed');
-                    return response.json();
-                })
-                .then(data => {
-                    console.log('Invoice updated successfully:', data);
-                    showNotification('Invoice updated successfully', 'success');
-                })
-                .catch(error => {
-                    console.error('Error updating invoice:', error);
-                    showNotification('Error updating invoice', 'danger');
-                    // Restore original value on error
-                    if (cell.dataset.originalValue) {
-                        cell.textContent = cell.dataset.originalValue;
+                if (type === 'checkbox') {
+                    newValue = input.checked;
+                    cell.textContent = newValue ? '✓' : '✗';
+                    updateData[field] = newValue;
+                } else if (type === 'select') {
+                    newValue = input.value;
+                    // If empty value selected, restore original
+                    if (!newValue || newValue === '') {
+                        cell.textContent = cell.dataset.originalValue || 'Not Set';
+                        cell.classList.remove('editing');
+                        currentEditingCell = null;
+                        return;
                     }
-                });
-        }
+                    cell.textContent = newValue;
+                    updateData[field] = newValue;
+                } else if (field === 'dueamount') {
+                    // Format currency fields
+                    const amount = parseAmount(input.value);
+                    newValue = formatCurrency(amount);
+                    cell.textContent = newValue;
+                    updateData[field] = newValue;
 
+                    // Calculate and update withholding immediately on client side
+                    const withholdingCell = row.querySelector('[data-field="withholding"]');
+                    if (withholdingCell) {
+                        const newWithholding = amount > 77.47 ? 2.00 : 0.00;
+                        withholdingCell.textContent = formatCurrency(newWithholding);
+
+                        // Include withholding in the update data
+                        // Server will recalculate anyway, but this ensures UI is in sync
+                        updateData.withholding = newWithholding.toFixed(2);
+                    }
+
+                    // Update the total when due amount changes
+                    setTimeout(() => updateTotal(row), 100);
+                } else {
+                    newValue = input.value;
+                    cell.textContent = newValue;
+                    updateData[field] = newValue;
+                }
+
+                cell.classList.remove('editing');
+                currentEditingCell = null;
+                delete cell.dataset.originalValue;
+
+                console.log('Updating invoice:', { invoiceId, updateData });
+
+                // PATCH request to update invoice
+                fetch(`/api/invoices/${invoiceId}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(updateData)
+                })
+                    .then(response => {
+                        if (!response.ok) throw new Error('Update failed');
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log('Invoice updated successfully:', data);
+
+                        // Double-check server response and update UI if needed
+                        if (data.invoice) {
+                            const serverWithholding = parseAmount(data.invoice.withholding);
+                            const withholdingCell = row.querySelector('[data-field="withholding"]');
+                            if (withholdingCell) {
+                                withholdingCell.textContent = formatCurrency(serverWithholding);
+                            }
+
+                            // Update total one more time with server values
+                            setTimeout(() => updateTotal(row), 100);
+                        }
+
+                        showNotification('Invoice updated successfully', 'success');
+                    })
+                    .catch(error => {
+                        console.error('Error updating invoice:', error);
+                        showNotification('Error updating invoice', 'danger');
+                        // Restore original value on error
+                        if (cell.dataset.originalValue) {
+                            cell.textContent = cell.dataset.originalValue;
+                        }
+                    });
+            }
         // Cancel edit
         function cancelEdit(cell) {
             if (!cell) return;
