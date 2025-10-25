@@ -452,7 +452,7 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
     currentY += 18;
     doc.text('Status:', rightColumn, currentY);
     doc.fillColor(invoice.traced ? '#28a745' : '#dc3545')
-       .text(invoice.traced ? 'Traced ✓' : 'Not Traced', rightColumn + 100, currentY);
+       .text(invoice.traced ? 'Traced' : 'Not Traced', rightColumn + 100, currentY);
     
     if (invoice.collecteddate) {
       currentY += 18;
