@@ -56,7 +56,13 @@ app.get("/invoices", async (req, res) => {
     const invoicesWithTotals = invoicesResult.rows.map(invoice => {
       const dueAmount = parseCurrency(invoice.dueamount);
       const withholding = parseCurrency(invoice.withholding);
-      const total = dueAmount + withholding;
+      const ritenuta = parseCurrency(invoice.ritenuta);
+      
+      // Calculate ritenuta (20% of due amount if enabled)
+      const ritenutaDeduction = ritenuta > 0 ? dueAmount * 0.20 : 0;
+      
+      // Subtract ritenuta from due amount, then add withholding
+      const total = (dueAmount - ritenutaDeduction) + withholding;
       
       return {
         ...invoice,
@@ -128,6 +134,16 @@ app.patch("/api/invoices/:id", async (req, res) => {
     // Handle boolean values for traced field
     if (updates.traced !== undefined) {
       updates.traced = updates.traced === true || updates.traced === 'true';
+    }
+
+    // Handle boolean values for TS field
+    if (updates.ts !== undefined) {
+      updates.ts = updates.ts === true || updates.ts === 'true';
+    }
+
+    // Handle ritenuta calculation
+    if (updates.ritenuta !== undefined) {
+      updates.ritenuta = updates.ritenuta === true || updates.ritenuta === 'true' ? 20 : 0;
     }
     
     // Handle date fields
@@ -203,7 +219,7 @@ app.post("/api/invoices", async (req, res) => {
   try {
     console.log("Received POST request:", req.body);
     
-    let { dueamount, system, invoicedate, traced, collecteddate, fiscalcode } = req.body;
+    let { dueamount, system, invoicedate, traced, collecteddate, fiscalcode, ts, ritenuta } = req.body;
     
     // Helper function to clean currency values
     const cleanCurrency = (value) => {
@@ -223,15 +239,15 @@ app.post("/api/invoices", async (req, res) => {
     let query, values;
     
     if (fiscalcode && fiscalcode.trim() !== '') {
-      query = `INSERT INTO invoices (dueamount, withholding, system, invoicedate, traced, collecteddate, fiscalcode) 
-               VALUES ($1, $2, $3, $4, $5, $6, $7) 
+      query = `INSERT INTO invoices (dueamount, withholding, system, invoicedate, traced, collecteddate, fiscalcode, ts, ritenuta) 
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
                RETURNING *`;
-      values = [dueamount, withholding, system, invoicedate, traced || false, collecteddate, fiscalcode];
+      values = [dueamount, withholding, system, invoicedate, traced || false, collecteddate, fiscalcode, ts || false, ritenuta ? 20 : 0];
     } else {
-      query = `INSERT INTO invoices (dueamount, withholding, system, invoicedate, traced, collecteddate) 
-               VALUES ($1, $2, $3, $4, $5, $6) 
+      query = `INSERT INTO invoices (dueamount, withholding, system, invoicedate, traced, collecteddate, ts, ritenuta) 
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
                RETURNING *`;
-      values = [dueamount, withholding, system, invoicedate, traced || false, collecteddate];
+      values = [dueamount, withholding, system, invoicedate, traced || false, collecteddate, ts || false, ritenuta ? 20 : 0];
     }
     
     const result = await db.query(query, values);
@@ -242,7 +258,12 @@ app.post("/api/invoices", async (req, res) => {
       invoice: result.rows[0] 
     });
   } catch (err) {
-    console.log("POST error:", err);
+    console.log("POST error details:", {
+      error: err,
+      message: err.message,
+      stack: err.stack,
+      requestBody: req.body
+    });
     res.status(500).json({ error: "Error creating invoice", details: err.message });
   }
 });
@@ -298,7 +319,13 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
     // Calculate amounts
     const dueAmount = parseCurrency(invoice.dueamount);
     const withholding = parseCurrency(invoice.withholding);
-    const total = dueAmount + withholding;
+    const ritenuta = parseCurrency(invoice.ritenuta) || 0;
+    
+    // Calculate ritenuta deduction (20% of due amount if ritenuta > 0)
+    const ritenutaDeduction = ritenuta > 0 ? dueAmount * 0.20 : 0;
+    
+    // Calculate total: (dueAmount - ritenuta) + withholding
+    const total = (dueAmount - ritenutaDeduction) + withholding;
     
     // Check if stamp is required (due amount > €77.47)
     const requiresStamp = dueAmount > 77.47;
@@ -316,24 +343,20 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
     // Pipe PDF to response
     doc.pipe(res);
     
-    // STAMP PLACEHOLDER (if required) - Top Right Corner
-    // 3cm = 85.04 points (1 cm = 28.35 points)
+    // STAMP PLACEHOLDER (if required) - Top Left Corner
     const stampSize = 85.04; // 3cm in points
     if (requiresStamp) {
-      const stampX = 50; // Left side (595 - 100 margin)
-      const stampY = 50;  // Top
+      const stampX = 50;
+      const stampY = 50;
       
-      // Draw square border
       doc.rect(stampX, stampY, stampSize, stampSize)
          .strokeColor('#dc3545')
          .lineWidth(2)
          .dash(5, { space: 3 })
          .stroke();
       
-      // Reset dash pattern
       doc.undash();
       
-      // Add text inside the square
       doc.fontSize(10)
          .fillColor('#dc3545')
          .font('Helvetica-Bold')
@@ -346,7 +369,6 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
            align: 'center'
          });
       
-      // Add small note below
       doc.fontSize(7)
          .fillColor('#666666')
          .font('Helvetica')
@@ -367,7 +389,6 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
     
     doc.moveDown(0.5);
     
-    // Line separator
     doc.moveTo(50, doc.y)
        .lineTo(545, doc.y)
        .strokeColor('#0d6efd')
@@ -380,11 +401,9 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
     const leftColumn = 50;
     const rightColumn = 320;
     let currentY = doc.y;
-    
-    // Store starting Y position for right column
     const startY = currentY;
     
-    // Left Column - Patient Information (with address)
+    // Left Column - Patient Information
     doc.fontSize(10)
        .fillColor('#999999')
        .text('BILLED TO:', leftColumn, currentY);
@@ -401,7 +420,6 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
        .fillColor('#666666')
        .text(`Fiscal Code: ${invoice.fiscalcode || 'N/A'}`, leftColumn, currentY);
     
-    // Add address if available
     if (invoice.patient_address) {
       currentY += 15;
       doc.text(invoice.patient_address, leftColumn, currentY, {
@@ -410,7 +428,6 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
       });
     }
     
-    // Add city, postal code, province
     if (invoice.patient_city || invoice.patient_postalcode) {
       currentY += 15;
       const cityLine = [
@@ -424,16 +441,15 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
       }
     }
     
-    // Add country if it exists and is not Italy
     if (invoice.patient_country && invoice.patient_country.toUpperCase() !== 'ITALY' && invoice.patient_country.toUpperCase() !== 'ITALIA') {
       currentY += 15;
       doc.font('Helvetica-Bold')
          .text(invoice.patient_country.toUpperCase(), leftColumn, currentY);
-      doc.font('Helvetica'); // Reset font
+      doc.font('Helvetica');
     }
     
     // Right Column - Invoice Information
-    currentY = startY; // Reset to top for right column
+    currentY = startY;
     
     doc.fontSize(10)
        .fillColor('#999999')
@@ -461,7 +477,6 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
       doc.text(formatDate(invoice.collecteddate), rightColumn + 100, currentY);
     }
     
-    // Ensure we move down enough to clear both columns
     doc.y = Math.max(doc.y, currentY + 30);
     doc.moveDown(1);
     
@@ -489,9 +504,8 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
     
     // Due Amount row
     doc.fillColor('#000000')
-       .text('Due Amount', descriptionX + 10, rowY)
+       .text('Totale (Esente art.10 - N.4)', descriptionX + 10, rowY)
        .text(formatCurrency(dueAmount), amountX, rowY, { width: 85, align: 'right' });
-    
     
     rowY += 25;
     doc.moveTo(50, rowY)
@@ -501,6 +515,23 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
        .stroke();
     
     rowY += 15;
+    
+    // Ritenuta row (if applicable) - SHOW AS DEDUCTION
+    if (ritenuta > 0) {
+      doc.fillColor('#000000')
+         .fontSize(10)
+         .text('Ritenuta d\'acconto (20%)', descriptionX + 10, rowY)
+         .text('-' + formatCurrency(ritenutaDeduction), amountX, rowY, { width: 85, align: 'right' });
+      
+      rowY += 25;
+      doc.moveTo(50, rowY)
+         .lineTo(545, rowY)
+         .strokeColor('#dddddd')
+         .lineWidth(1)
+         .stroke();
+      
+      rowY += 15;
+    }
     
     // Withholding row
     doc.fillColor('#000000')
@@ -531,21 +562,18 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
     // SIGNATURE SECTION
     const signatureY = rowY + 80;
     
-    // Add signature image
     try {
       doc.image('public/images/signature.png', 350, signatureY, { 
         width: 150,
         align: 'right'
       });
       
-      // Add line under signature
       doc.moveTo(350, signatureY + 60)
          .lineTo(500, signatureY + 60)
          .strokeColor('#000000')
          .lineWidth(1)
          .stroke();
       
-      // Add signature label
       doc.fontSize(10)
          .fillColor('#000000')
          .font('Helvetica')
@@ -554,7 +582,6 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
            align: 'center' 
          });
          
-      // Add date under signature
       doc.fontSize(8)
          .fillColor('#666666')
          .text(`Date: ${formatDate(new Date())}`, 350, signatureY + 80, { 
@@ -564,7 +591,6 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
          
     } catch (err) {
       console.log('Signature image not found:', err.message);
-      // If signature not found, just add text
       doc.fontSize(10)
          .fillColor('#000000')
          .font('Helvetica-Bold')
@@ -583,15 +609,12 @@ app.get("/api/invoices/:id/pdf", async (req, res) => {
        .lineWidth(1)
        .stroke();
     
-  
     doc.fontSize(8)
        .text('This is a computer-generated invoice with digital signature.', 
              50, footerY + 35, { align: 'center' });
     
     doc.text(`Generated on: ${new Date().toLocaleString('en-GB')}`, 
              50, footerY + 50, { align: 'center' });
-    
-
     
     // Finalize PDF
     doc.end();

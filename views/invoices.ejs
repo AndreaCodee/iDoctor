@@ -82,10 +82,12 @@
                         <th>Patient Name</th>
                         <th>Due Amount</th>
                         <th>Withholding</th>
+                        <th>Ritenuta</th>
                         <th>Total</th>
                         <th>System</th>
                         <th>Invoice Date</th>
                         <th>Traced</th>
+                        <th>TS</th>
                         <th>Collected Date</th>
                         <th>Fiscal Code</th>
                         <th>Actions</th>
@@ -110,6 +112,10 @@
                                 <td class="align-middle bg-light" title="Auto-calculated">
                                     <%= invoice.withholding ? invoice.withholding.replace('$', '€' ) : '€0,00' %>                           
                                 </td>
+                                <td class="editable-cell" data-field="ritenuta" data-type="checkbox"
+                                    onclick="makeEditable(this)">
+                                    <%= parseFloat(invoice.ritenuta) > 0 ? '20%' : '0%' %>
+                                </td>
                                 <td class="total-cell align-middle" data-total>
                                     <%= invoice.total %>
                                 </td>
@@ -125,6 +131,10 @@
                                 <td class="editable-cell" data-field="traced" data-type="checkbox"
                                     onclick="makeEditable(this)">
                                     <%= invoice.traced ? '✓' : '✗' %>
+                                </td>
+                                <td class="editable-cell" data-field="ts" data-type="checkbox"
+                                    onclick="makeEditable(this)">
+                                    <%= invoice.ts ? '✓' : '✗' %>
                                 </td>
                                 <td class="editable-cell" data-field="collecteddate" data-type="date"
                                     onclick="makeEditable(this)">
@@ -193,6 +203,15 @@
                         <div class="mb-3 form-check">
                             <input type="checkbox" class="form-check-input" id="traced">
                             <label class="form-check-label" for="traced">Traced</label>
+                        </div>
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" id="ts">
+                            <label class="form-check-label" for="ts">TS</label>
+                        </div>
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" id="ritenuta_checkbox">
+                            <label class="form-check-label" for="ritenuta_checkbox">Apply Ritenuta (20%)</label>
+                            <input type="hidden" id="ritenuta" value="0">
                         </div>
                         <div class="mb-3">
                             <label for="collecteddate" class="form-label">Collected Date</label>
@@ -735,10 +754,42 @@
         }
 
         // Submit new invoice from modal
+    // Function to handle payment system changes
+    function handleSystemChange() {
+        const systemSelect = document.getElementById('system');
+        const tracedCheckbox = document.getElementById('traced');
+        
+        // Set traced automatically for POS or Bonifico
+        if (systemSelect.value === 'POS' || systemSelect.value === 'Bonifico') {
+            tracedCheckbox.checked = true;
+            tracedCheckbox.disabled = true;
+        } else {
+            tracedCheckbox.disabled = false;
+        }
+    }
+
     // Submit new invoice from modal
+    // Function to calculate ritenuta
+    function calculateRitenuta(dueAmount, applyRitenuta) {
+        return applyRitenuta ? (dueAmount * 0.20) : 0;
+    }
+
+    // Add event listener to due amount and ritenuta checkbox
+    document.getElementById('dueamount').addEventListener('change', function() {
+        const dueAmount = parseFloat(this.value) || 0;
+        const applyRitenuta = document.getElementById('ritenuta_checkbox').checked;
+        document.getElementById('ritenuta').value = calculateRitenuta(dueAmount, applyRitenuta);
+    });
+
+    document.getElementById('ritenuta_checkbox').addEventListener('change', function() {
+        const dueAmount = parseFloat(document.getElementById('dueamount').value) || 0;
+        document.getElementById('ritenuta').value = calculateRitenuta(dueAmount, this.checked);
+    });
+
     function submitNewInvoice() {
         const fiscalcode = document.getElementById('fiscalcode').value;
         const dueAmount = parseFloat(document.getElementById('dueamount').value) || 0;
+        const system = document.getElementById('system').value;
 
         // Calculate withholding based on due amount
         const withholding = dueAmount > 77.47 ? 2.00 : 0.00;
@@ -750,12 +801,20 @@
             return;
         }
 
+        // Set traced based on system
+        let traced = document.getElementById('traced').checked;
+        if (system === 'POS' || system === 'Bonifico') {
+            traced = true;
+        }
+
         const newInvoice = {
             dueamount: dueAmount.toFixed(2),
             withholding: withholding.toFixed(2),
-            system: document.getElementById('system').value,
+            system: system,
             invoicedate: document.getElementById('invoicedate').value,
-            traced: document.getElementById('traced').checked,
+            traced: traced,
+            ts: document.getElementById('ts').checked,
+            ritenuta: calculateRitenuta(dueAmount, document.getElementById('ritenuta_checkbox').checked),
             collecteddate: document.getElementById('collecteddate').value || null,
             fiscalcode: fiscalcode
         };
@@ -1037,12 +1096,25 @@
                 // Set today's date as default
                 document.getElementById('invoicedate').valueAsDate = new Date();
 
-                // Reset withholding
+                // Reset form fields
                 document.getElementById('withholding').value = '0.00';
+                document.getElementById('dueamount').value = '0.00';
+                document.getElementById('system').value = '';
+                document.getElementById('traced').checked = false;
+                document.getElementById('traced').disabled = false;
+                document.getElementById('ts').checked = false;
+                document.getElementById('collecteddate').value = '';
+                document.getElementById('patient-search').value = '';
+                document.getElementById('fiscalcode').value = '';
+                document.getElementById('selected-patient').textContent = '';
 
                 // Show the modal
                 const modal = new bootstrap.Modal(document.getElementById('addInvoiceModal'));
                 modal.show();
+
+                // Setup system change handler
+                const systemSelect = document.getElementById('system');
+                systemSelect.addEventListener('change', handleSystemChange);
             }
 
     </script>
@@ -1050,4 +1122,3 @@
 
 </html>
 
-    </html>
