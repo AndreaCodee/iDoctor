@@ -43,16 +43,51 @@ app.get("/patients", async (req, res) => {
   }
 });
 
+// API endpoint to search Italian cities
+app.get("/api/cities/search", async (req, res) => {
+  try {
+    const searchTerm = req.query.q || '';
+    if (searchTerm.length < 2) {
+      return res.json([]);
+    }
+
+    const result = await db.query(
+      `SELECT city, province 
+       FROM italian_cities 
+       WHERE city ILIKE $1 
+       ORDER BY city ASC 
+       LIMIT 10`,
+      [`${searchTerm}%`]
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Error searching cities:", err);
+    res.status(500).json({ error: "Error searching cities" });
+  }
+});
+
 // API Routes for Patients CRUD operations
 app.post("/api/patients", async (req, res) => {
   try {
-    const { name, middlename, surname, address, fiscalcode, business } = req.body;
+    const { name, middlename, surname, gender, birthday, birthplace, province, address, fiscalcode, business } = req.body;
     
     const result = await db.query(
-      `INSERT INTO patients (name, middlename, surname, address, fiscalcode, business) 
-       VALUES ($1, $2, $3, $4, $5, $6) 
+      `INSERT INTO patients (name, middlename, surname, gender, birthday, birthplace, province, address, fiscalcode, business) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
        RETURNING *`,
-      [name, middlename || null, surname, address || null, fiscalcode, business || false]
+      [
+        name, 
+        middlename || null, 
+        surname,
+        gender || null,
+        birthday || null,
+        birthplace || null,
+        province || null,
+        address || null, 
+        fiscalcode, 
+        business || false
+      ]
     );
     
     res.status(201).json({

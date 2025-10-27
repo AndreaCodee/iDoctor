@@ -51,6 +51,10 @@
                         <th>Name</th>
                         <th>Middle Name</th>
                         <th>Surname</th>
+                        <th>Gender</th>
+                        <th>Birthday</th>
+                        <th>Birthplace</th>
+                        <th>Province</th>
                         <th>Address</th>
                         <th>Fiscal Code</th>
                         <th>Business</th>
@@ -69,6 +73,18 @@
                         </td>
                         <td class="editable-cell" data-field="surname" data-type="text" onclick="makeEditable(this)">
                             <%= patient.surname %>
+                        </td>
+                        <td class="editable-cell" data-field="gender" data-type="select" onclick="makeEditable(this)">
+                            <%= patient.gender || '' %>
+                        </td>
+                        <td class="editable-cell" data-field="birthday" data-type="date" onclick="makeEditable(this)">
+                            <%= patient.birthday ? new Date(patient.birthday).toLocaleDateString('en-CA') : '' %>
+                        </td>
+                        <td class="editable-cell" data-field="birthplace" data-type="text" onclick="makeEditable(this)">
+                            <%= patient.birthplace || '' %>
+                        </td>
+                        <td class="editable-cell" data-field="province" data-type="text" onclick="makeEditable(this)">
+                            <%= patient.province || '' %>
                         </td>
                         <td class="editable-cell" data-field="address" data-type="text" onclick="makeEditable(this)">
                             <%= patient.address || '' %>
@@ -114,12 +130,40 @@
                             <input type="text" class="form-control" id="surname" required>
                         </div>
                         <div class="mb-3">
+                            <label for="gender" class="form-label">Gender</label>
+                            <select class="form-control" id="gender" required>
+                                <option value="">Select gender</option>
+                                <option value="M">Male</option>
+                                <option value="F">Female</option>
+                                <option value="O">Other</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="birthday" class="form-label">Birthday</label>
+                            <input type="date" class="form-control" id="birthday" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="birthplace" class="form-label">Birthplace</label>
+                            <input type="text" class="form-control" id="birthplace" autocomplete="off" required>
+                            <div id="cityDropdown" class="dropdown-menu" style="display: none; max-height: 200px; overflow-y: auto;"></div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="province" class="form-label">Province</label>
+                            <input type="text" class="form-control" id="province" required readonly>
+                        </div>
+                        <div class="mb-3">
                             <label for="address" class="form-label">Address</label>
                             <input type="text" class="form-control" id="address">
                         </div>
                         <div class="mb-3">
                             <label for="fiscalcode" class="form-label">Fiscal Code</label>
-                            <input type="text" class="form-control" id="fiscalcode" required>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="fiscalcode" required readonly>
+                                <button class="btn btn-outline-secondary" type="button" id="generateFiscalCode">
+                                    <i class="bi bi-arrow-clockwise"></i> Generate
+                                </button>
+                            </div>
+                            <small class="form-text text-muted">Will be generated automatically when all required fields are filled.</small>
                         </div>
                         <div class="mb-3 form-check">
                             <input type="checkbox" class="form-check-input" id="business">
@@ -137,6 +181,7 @@
 
     <!-- Bootstrap JS and Popper.js -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/js/fiscalcode.js"></script>
     
     <script>
         // Current editing cell reference
@@ -182,6 +227,21 @@
                 inputElement.className = 'form-check-input';
                 inputElement.checked = currentValue === '✓';
                 inputElement.addEventListener('change', () => saveCell(cell));
+            } else if (type === 'select' && field === 'gender') {
+                inputElement = document.createElement('select');
+                inputElement.className = 'form-control form-control-sm';
+                ['', 'M', 'F', 'O'].forEach(value => {
+                    const option = document.createElement('option');
+                    option.value = value;
+                    option.textContent = value || 'Select gender';
+                    option.selected = value === currentValue;
+                    inputElement.appendChild(option);
+                });
+            } else if (type === 'date') {
+                inputElement = document.createElement('input');
+                inputElement.type = 'date';
+                inputElement.className = 'form-control form-control-sm';
+                inputElement.value = currentValue;
             } else {
                 inputElement = document.createElement('input');
                 inputElement.type = 'text';
@@ -280,13 +340,18 @@
                 name: document.getElementById('name').value.trim(),
                 middlename: document.getElementById('middlename').value.trim(),
                 surname: document.getElementById('surname').value.trim(),
+                gender: document.getElementById('gender').value.trim(),
+                birthday: document.getElementById('birthday').value,
+                birthplace: document.getElementById('birthplace').value.trim(),
+                province: document.getElementById('province').value.trim(),
                 address: document.getElementById('address').value.trim(),
                 fiscalcode: document.getElementById('fiscalcode').value.trim(),
                 business: document.getElementById('business').checked
             };
 
             // Validate required fields
-            if (!newPatient.name || !newPatient.surname || !newPatient.fiscalcode) {
+            if (!newPatient.name || !newPatient.surname || !newPatient.fiscalcode ||
+                !newPatient.gender || !newPatient.birthday || !newPatient.birthplace || !newPatient.province) {
                 showNotification('Please fill in all required fields', 'danger');
                 return;
             }
@@ -344,6 +409,222 @@
         // Close modal handler
         document.getElementById('addPatientModal').addEventListener('hidden.bs.modal', function () {
             document.getElementById('addPatientForm').reset();
+        });
+
+        // Fiscal code generation
+        const requiredFields = ['name', 'surname', 'gender', 'birthday', 'birthplace'];
+        const generateBtn = document.getElementById('generateFiscalCode');
+        const fiscalcodeInput = document.getElementById('fiscalcode');
+
+        function checkRequiredFields() {
+            return requiredFields.every(field => {
+                const input = document.getElementById(field);
+                return input && input.value.trim() !== '';
+            });
+        }
+
+        function generateFiscalCodeIfComplete() {
+            console.log('Checking fields for fiscal code generation...');
+            if (checkRequiredFields()) {
+                console.log('All required fields are filled, generating fiscal code...');
+                const name = document.getElementById('name').value;
+                const surname = document.getElementById('surname').value;
+                const gender = document.getElementById('gender').value;
+                const birthday = document.getElementById('birthday').value;
+                const birthplace = document.getElementById('birthplace').value;
+
+                console.log('Input values:', { name, surname, gender, birthday, birthplace });
+                
+                try {
+                    const fiscalCode = generateFiscalCode(surname, name, gender, birthday, birthplace);
+                    console.log('Generated fiscal code:', fiscalCode);
+                    fiscalcodeInput.value = fiscalCode;
+                    
+                    if (!fiscalCode) {
+                        console.error('Fiscal code generation failed - empty result');
+                        showNotification('Error generating fiscal code', 'danger');
+                    }
+                } catch (error) {
+                    console.error('Error during fiscal code generation:', error);
+                    showNotification('Error generating fiscal code: ' + error.message, 'danger');
+                }
+            } else {
+                console.log('Some required fields are missing');
+                const missing = requiredFields.filter(field => {
+                    const input = document.getElementById(field);
+                    return !input || !input.value.trim();
+                });
+                console.log('Missing fields:', missing);
+            }
+        }
+
+        // Add event listeners to all required fields
+        requiredFields.forEach(field => {
+            const input = document.getElementById(field);
+            if (input) {
+                console.log(`Adding listeners for field: ${field}`);
+                input.addEventListener('change', function() {
+                    console.log(`${field} changed:`, this.value);
+                    generateFiscalCodeIfComplete();
+                });
+                input.addEventListener('blur', function() {
+                    console.log(`${field} blur:`, this.value);
+                    generateFiscalCodeIfComplete();
+                });
+                // Add input event for immediate feedback
+                input.addEventListener('input', function() {
+                    console.log(`${field} input:`, this.value);
+                    generateFiscalCodeIfComplete();
+                });
+            } else {
+                console.error(`Field ${field} not found in the form`);
+            }
+        });
+
+        // Manual generation button
+        generateBtn.addEventListener('click', () => {
+            if (!checkRequiredFields()) {
+                showNotification('Please fill in all required fields first', 'danger');
+                return;
+            }
+            generateFiscalCodeIfComplete();
+        });
+
+        // Birthplace autocomplete functionality
+        const birthplaceInput = document.getElementById('birthplace');
+        const provinceInput = document.getElementById('province');
+        const cityDropdown = document.getElementById('cityDropdown');
+        let typingTimer;
+        let currentCities = [];
+
+        // Style the dropdown
+        cityDropdown.style.position = 'absolute';
+        cityDropdown.style.width = birthplaceInput.offsetWidth + 'px';
+        cityDropdown.style.backgroundColor = '#fff';
+        cityDropdown.style.border = '1px solid rgba(0,0,0,.15)';
+        cityDropdown.style.borderRadius = '0.25rem';
+        cityDropdown.style.zIndex = '1000';
+
+        // Update dropdown position
+        function updateDropdownPosition() {
+            const rect = birthplaceInput.getBoundingClientRect();
+            cityDropdown.style.top = (rect.bottom + window.scrollY) + 'px';
+            cityDropdown.style.left = rect.left + 'px';
+            cityDropdown.style.width = rect.width + 'px';
+        }
+
+        birthplaceInput.addEventListener('input', function() {
+            clearTimeout(typingTimer);
+            const searchTerm = this.value.trim();
+            
+            // Wait for user to stop typing for 300ms
+            typingTimer = setTimeout(() => {
+                if (searchTerm.length >= 2) {
+                    fetch(`/api/cities/search?q=${encodeURIComponent(searchTerm)}`)
+                        .then(response => response.json())
+                        .then(cities => {
+                            currentCities = cities;
+                            updateDropdownPosition();
+                            
+                            // Clear existing options
+                            cityDropdown.innerHTML = '';
+                            
+                            if (cities.length > 0) {
+                                // Add new options
+                                cities.forEach(city => {
+                                    const item = document.createElement('a');
+                                    item.className = 'dropdown-item';
+                                    item.href = '#';
+                                    item.textContent = `${city.city} (${city.province})`;
+                                    item.style.padding = '0.5rem 1rem';
+                                    item.style.display = 'block';
+                                    item.style.cursor = 'pointer';
+                                    
+                                    item.addEventListener('click', (e) => {
+                                        e.preventDefault();
+                                        birthplaceInput.value = city.city;
+                                        provinceInput.value = city.province;
+                                        cityDropdown.style.display = 'none';
+                                        // Trigger fiscal code generation after setting city
+                                        generateFiscalCodeIfComplete();
+                                    });
+
+                                    item.addEventListener('mouseover', () => {
+                                        item.style.backgroundColor = '#f8f9fa';
+                                    });
+
+                                    item.addEventListener('mouseout', () => {
+                                        item.style.backgroundColor = '';
+                                    });
+                                    
+                                    cityDropdown.appendChild(item);
+                                });
+                                
+                                cityDropdown.style.display = 'block';
+                            } else {
+                                cityDropdown.style.display = 'none';
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error fetching cities:', error);
+                            cityDropdown.style.display = 'none';
+                        });
+                } else {
+                    cityDropdown.style.display = 'none';
+                }
+            }, 300);
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!birthplaceInput.contains(e.target) && !cityDropdown.contains(e.target)) {
+                cityDropdown.style.display = 'none';
+            }
+        });
+
+        // Handle keyboard navigation
+        birthplaceInput.addEventListener('keydown', (e) => {
+            if (!cityDropdown.style.display || cityDropdown.style.display === 'none') return;
+            
+            const items = cityDropdown.getElementsByTagName('a');
+            const activeItem = cityDropdown.querySelector('.active');
+            let index = -1;
+            
+            if (activeItem) {
+                index = Array.from(items).indexOf(activeItem);
+            }
+            
+            switch (e.key) {
+                case 'ArrowDown':
+                    e.preventDefault();
+                    if (index < items.length - 1) {
+                        if (activeItem) activeItem.classList.remove('active');
+                        items[index + 1].classList.add('active');
+                        items[index + 1].scrollIntoView({ block: 'nearest' });
+                    }
+                    break;
+                    
+                case 'ArrowUp':
+                    e.preventDefault();
+                    if (index > 0) {
+                        if (activeItem) activeItem.classList.remove('active');
+                        items[index - 1].classList.add('active');
+                        items[index - 1].scrollIntoView({ block: 'nearest' });
+                    }
+                    break;
+                    
+                case 'Enter':
+                    e.preventDefault();
+                    if (activeItem) {
+                        activeItem.click();
+                    }
+                    break;
+                    
+                case 'Escape':
+                    e.preventDefault();
+                    cityDropdown.style.display = 'none';
+                    break;
+            }
         });
 
     </script>
