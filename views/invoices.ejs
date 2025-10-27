@@ -67,9 +67,12 @@
             <div class="col">
                 <h1 class="display-4">Invoice Management</h1>
             </div>
-            <div class="col-auto">
+            <div class="col-auto d-flex gap-2">
                 <button class="btn btn-success btn-lg" onclick="addNewInvoice()">
                     <i class="bi bi-plus-circle"></i> Add Invoice
+                </button>
+                <button class="btn btn-primary btn-lg" onclick="exportToCSV()">
+                    <i class="bi bi-file-earmark-spreadsheet"></i> Export CSV
                 </button>
             </div>
         </div>
@@ -1115,6 +1118,79 @@
                 // Setup system change handler
                 const systemSelect = document.getElementById('system');
                 systemSelect.addEventListener('change', handleSystemChange);
+            }
+
+            function exportToCSV() {
+                // Get all rows from the table
+                const table = document.querySelector('.table');
+                const rows = Array.from(table.querySelectorAll('tbody tr'));
+                
+                // Define headers (using Italian terms as shown in the UI)
+                const headers = [
+                    'ID',
+                    'Patient Name',
+                    'Due Amount',
+                    'Withholding',
+                    'Ritenuta',
+                    'Total',
+                    'System',
+                    'Invoice Date',
+                    'Traced',
+                    'TS',
+                    'Collected Date',
+                    'Fiscal Code'
+                ];
+                
+                // Convert rows to CSV data
+                const csvData = rows.map(row => {
+                    const cells = Array.from(row.querySelectorAll('td'));
+                    return [
+                        cells[0].textContent.trim(), // ID
+                        cells[1].textContent.trim(), // Patient Name
+                        cells[2].textContent.trim(), // Due Amount
+                        cells[3].textContent.trim(), // Withholding
+                        cells[9].textContent.trim(), // Ritenuta
+                        cells[4].textContent.trim(), // Total
+                        cells[5].textContent.trim(), // System
+                        cells[6].textContent.trim(), // Invoice Date
+                        cells[7].textContent.trim(), // Traced
+                        cells[8].textContent.trim(), // TS
+                        cells[10].textContent.trim(), // Collected Date
+                        cells[11].textContent.trim()  // Fiscal Code
+                    ];
+                });
+                
+                // Add headers to the beginning
+                csvData.unshift(headers);
+                
+                // Convert to CSV string with proper line endings
+                const csvContent = csvData.map(row => 
+                    row.map(cell => {
+                        // Ensure cell is a string and clean it
+                        const cellStr = String(cell).trim();
+                        // Wrap in quotes if contains comma, quotes, or newlines
+                        if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n') || cellStr.includes('\r')) {
+                            return `"${cellStr.replace(/"/g, '""')}"`;
+                        }
+                        return cellStr;
+                    }).join(',')
+                ).join('\r\n'); // Use Windows-style line endings for Excel compatibility
+
+                // Add BOM for Excel UTF-8 compatibility
+                const BOM = '\uFEFF';
+                
+                // Create blob and download
+                const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                const date = new Date().toISOString().split('T')[0];
+                
+                link.href = URL.createObjectURL(blob);
+                link.download = `invoices_${date}.csv`;
+                link.style.display = 'none';
+                
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
             }
 
     </script>
