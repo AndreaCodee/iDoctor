@@ -54,10 +54,11 @@
                         <p class="card-text text-muted mb-4">
                             Visualizzazione, modifica e aggiunta pazienti.
                         </p>
-                        <button class="btn btn-primary btn-lg mt-auto">
-                            <i class="fas fa-arrow-right me-2"></i>
-                            Gestisci Pazienti
-                        </button>
+                        <form action="/patients" method="get">
+                            <input class="btn btn-primary btn-lg mt-auto" type="submit" name="viewPatients"
+                                value="Gestisci Fatture" id="tab">
+
+                        </form>
                     </div>
                 </div>
             </div>

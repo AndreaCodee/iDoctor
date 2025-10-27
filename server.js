@@ -21,7 +21,6 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.json());
 
 app.get("/", async(req, res) => {
-
   try {
     const result = await axios.get("https://stoic-quotes.com/api/quote");
     const quote = result.data.text;
@@ -31,6 +30,102 @@ app.get("/", async(req, res) => {
     res.status(404).send(error.message);
   }
 }); 
+
+app.get("/patients", async (req, res) => {
+  try {
+    const result = await db.query(
+      "SELECT * FROM patients ORDER BY surname, name"
+    );
+    res.render("patients.ejs", { patients: result.rows });
+  } catch (err) {
+    console.error("Error fetching patients:", err);
+    res.status(500).send("Error loading patients");
+  }
+});
+
+// API Routes for Patients CRUD operations
+app.post("/api/patients", async (req, res) => {
+  try {
+    const { name, middlename, surname, address, fiscalcode, business } = req.body;
+    
+    const result = await db.query(
+      `INSERT INTO patients (name, middlename, surname, address, fiscalcode, business) 
+       VALUES ($1, $2, $3, $4, $5, $6) 
+       RETURNING *`,
+      [name, middlename || null, surname, address || null, fiscalcode, business || false]
+    );
+    
+    res.status(201).json({
+      success: true,
+      message: "Patient created successfully",
+      patient: result.rows[0]
+    });
+  } catch (err) {
+    console.error("Error creating patient:", err);
+    res.status(500).json({ 
+      error: "Error creating patient", 
+      details: err.message 
+    });
+  }
+});
+
+app.patch("/api/patients/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+    
+    // Build the query dynamically based on the fields to update
+    const fields = Object.keys(updates);
+    const values = Object.values(updates);
+    const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
+    values.push(id);
+    
+    const query = `UPDATE patients SET ${setClause} WHERE id = $${values.length} RETURNING *`;
+    const result = await db.query(query, values);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Patient not found" });
+    }
+    
+    res.json({
+      success: true,
+      message: "Patient updated successfully",
+      patient: result.rows[0]
+    });
+  } catch (err) {
+    console.error("Error updating patient:", err);
+    res.status(500).json({ 
+      error: "Error updating patient", 
+      details: err.message 
+    });
+  }
+});
+
+app.delete("/api/patients/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.query(
+      "DELETE FROM patients WHERE id = $1 RETURNING *",
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Patient not found" });
+    }
+    
+    res.json({
+      success: true,
+      message: "Patient deleted successfully",
+      patient: result.rows[0]
+    });
+  } catch (err) {
+    console.error("Error deleting patient:", err);
+    res.status(500).json({ 
+      error: "Error deleting patient", 
+      details: err.message 
+    });
+  }
+});
 
 app.get("/invoices", async (req, res) => {
   try {
