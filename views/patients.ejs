@@ -22,6 +22,19 @@
         .editing {
             background-color: #fff3cd;
         }
+
+        .value-display {
+            font-family: monospace;
+            background-color: #f8f9fa;
+            padding: 0.5rem;
+            border-radius: 0.25rem;
+            margin: 0.5rem 0;
+        }
+
+        .value-label {
+            font-weight: bold;
+            color: #495057;
+        }
     </style>
 </head>
 
@@ -107,6 +120,43 @@
         </div>
     </div>
 
+    <!-- Confirmation Modal -->
+    <div class="modal fade" id="confirmChangeModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-warning">
+                    <h5 class="modal-title">
+                        <i class="bi bi-exclamation-triangle"></i> Confirm Change
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Are you sure you want to update this field?</p>
+                    <div class="mb-3">
+                        <div class="value-label">Field:</div>
+                        <div class="value-display" id="confirmFieldName"></div>
+                    </div>
+                    <div class="mb-3">
+                        <div class="value-label">Old Value:</div>
+                        <div class="value-display" id="confirmOldValue"></div>
+                    </div>
+                    <div class="mb-3">
+                        <div class="value-label">New Value:</div>
+                        <div class="value-display text-primary fw-bold" id="confirmNewValue"></div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" id="cancelChangeBtn">
+                        <i class="bi bi-x-circle"></i> Cancel
+                    </button>
+                    <button type="button" class="btn btn-warning" id="confirmChangeBtn">
+                        <i class="bi bi-check-circle"></i> Confirm Change
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Add Patient Modal -->
     <div class="modal fade" id="addPatientModal" tabindex="-1">
         <div class="modal-dialog">
@@ -186,6 +236,38 @@
     <script>
         // Current editing cell reference
         let currentEditingCell = null;
+        let pendingChange = null;
+        let confirmModal = null;
+
+        // Initialize confirmation modal
+        document.addEventListener('DOMContentLoaded', () => {
+            confirmModal = new bootstrap.Modal(document.getElementById('confirmChangeModal'));
+            
+            // Confirm button handler
+            document.getElementById('confirmChangeBtn').addEventListener('click', () => {
+                if (pendingChange) {
+                    performSave(pendingChange);
+                    confirmModal.hide();
+                    pendingChange = null;
+                }
+            });
+
+            // Cancel button handler
+            document.getElementById('cancelChangeBtn').addEventListener('click', () => {
+                if (pendingChange) {
+                    cancelEdit(pendingChange.cell);
+                    pendingChange = null;
+                }
+            });
+
+            // Handle modal close
+            document.getElementById('confirmChangeModal').addEventListener('hidden.bs.modal', () => {
+                if (pendingChange) {
+                    cancelEdit(pendingChange.cell);
+                    pendingChange = null;
+                }
+            });
+        });
 
         // Helper function to show notifications
         function showNotification(message, type = 'success') {
@@ -202,6 +284,22 @@
             const bsToast = new bootstrap.Toast(toast);
             bsToast.show();
             toast.addEventListener('hidden.bs.toast', () => toast.remove());
+        }
+
+        // Format field name for display
+        function formatFieldName(field) {
+            return field.charAt(0).toUpperCase() + field.slice(1).replace(/([A-Z])/g, ' $1');
+        }
+
+        // Format value for display
+        function formatValueDisplay(value, type) {
+            if (value === null || value === undefined || value === '') {
+                return '(empty)';
+            }
+            if (type === 'checkbox') {
+                return value === '✓' || value === true ? 'Yes (✓)' : 'No (✗)';
+            }
+            return value;
         }
 
         // Make cell editable
@@ -271,16 +369,17 @@
             }
         }
 
-        // Save edited cell
+        // Save edited cell (now shows confirmation)
         function saveCell(cell) {
             if (!cell || !cell.classList.contains('editing')) return;
 
-            const input = cell.querySelector('input');
+            const input = cell.querySelector('input, select');
             if (!input) return;
 
             const field = cell.dataset.field;
             const type = cell.dataset.type;
             const patientId = cell.closest('tr').dataset.patientId;
+            const oldValue = cell.dataset.originalValue;
             let newValue;
             let updateData = {};
 
@@ -291,12 +390,37 @@
                 newValue = input.value.trim();
                 if (!newValue) {
                     if (field === 'name' || field === 'surname' || field === 'fiscalcode') {
-                        showNotification(`${field} cannot be empty`, 'danger');
+                        showNotification(`${formatFieldName(field)} cannot be empty`, 'danger');
                         return;
                     }
                 }
                 updateData[field] = newValue;
             }
+
+            // Check if value actually changed
+            if (oldValue === newValue) {
+                cancelEdit(cell);
+                return;
+            }
+
+            // Show confirmation modal
+            document.getElementById('confirmFieldName').textContent = formatFieldName(field);
+            document.getElementById('confirmOldValue').textContent = formatValueDisplay(oldValue, type);
+            document.getElementById('confirmNewValue').textContent = formatValueDisplay(newValue, type);
+
+            pendingChange = {
+                cell: cell,
+                newValue: newValue,
+                updateData: updateData,
+                patientId: patientId
+            };
+
+            confirmModal.show();
+        }
+
+        // Perform the actual save operation
+        function performSave(change) {
+            const { cell, newValue, updateData, patientId } = change;
 
             fetch(`/api/patients/${patientId}`, {
                 method: 'PATCH',
@@ -424,37 +548,24 @@
         }
 
         function generateFiscalCodeIfComplete() {
-            console.log('Checking fields for fiscal code generation...');
             if (checkRequiredFields()) {
-                console.log('All required fields are filled, generating fiscal code...');
                 const name = document.getElementById('name').value;
                 const surname = document.getElementById('surname').value;
                 const gender = document.getElementById('gender').value;
                 const birthday = document.getElementById('birthday').value;
                 const birthplace = document.getElementById('birthplace').value;
-
-                console.log('Input values:', { name, surname, gender, birthday, birthplace });
                 
                 try {
                     const fiscalCode = generateFiscalCode(surname, name, gender, birthday, birthplace);
-                    console.log('Generated fiscal code:', fiscalCode);
                     fiscalcodeInput.value = fiscalCode;
                     
                     if (!fiscalCode) {
-                        console.error('Fiscal code generation failed - empty result');
                         showNotification('Error generating fiscal code', 'danger');
                     }
                 } catch (error) {
                     console.error('Error during fiscal code generation:', error);
                     showNotification('Error generating fiscal code: ' + error.message, 'danger');
                 }
-            } else {
-                console.log('Some required fields are missing');
-                const missing = requiredFields.filter(field => {
-                    const input = document.getElementById(field);
-                    return !input || !input.value.trim();
-                });
-                console.log('Missing fields:', missing);
             }
         }
 
@@ -462,22 +573,9 @@
         requiredFields.forEach(field => {
             const input = document.getElementById(field);
             if (input) {
-                console.log(`Adding listeners for field: ${field}`);
-                input.addEventListener('change', function() {
-                    console.log(`${field} changed:`, this.value);
-                    generateFiscalCodeIfComplete();
-                });
-                input.addEventListener('blur', function() {
-                    console.log(`${field} blur:`, this.value);
-                    generateFiscalCodeIfComplete();
-                });
-                // Add input event for immediate feedback
-                input.addEventListener('input', function() {
-                    console.log(`${field} input:`, this.value);
-                    generateFiscalCodeIfComplete();
-                });
-            } else {
-                console.error(`Field ${field} not found in the form`);
+                input.addEventListener('change', generateFiscalCodeIfComplete);
+                input.addEventListener('blur', generateFiscalCodeIfComplete);
+                input.addEventListener('input', generateFiscalCodeIfComplete);
             }
         });
 
@@ -517,7 +615,6 @@
             clearTimeout(typingTimer);
             const searchTerm = this.value.trim();
             
-            // Wait for user to stop typing for 300ms
             typingTimer = setTimeout(() => {
                 if (searchTerm.length >= 2) {
                     fetch(`/api/cities/search?q=${encodeURIComponent(searchTerm)}`)
@@ -526,11 +623,9 @@
                             currentCities = cities;
                             updateDropdownPosition();
                             
-                            // Clear existing options
                             cityDropdown.innerHTML = '';
                             
                             if (cities.length > 0) {
-                                // Add new options
                                 cities.forEach(city => {
                                     const item = document.createElement('a');
                                     item.className = 'dropdown-item';
@@ -545,7 +640,6 @@
                                         birthplaceInput.value = city.city;
                                         provinceInput.value = city.province;
                                         cityDropdown.style.display = 'none';
-                                        // Trigger fiscal code generation after setting city
                                         generateFiscalCodeIfComplete();
                                     });
 
